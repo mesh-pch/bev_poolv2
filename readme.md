@@ -14,7 +14,7 @@ To install the plugin, follow these steps:
 
 1. Clone the repository:
     ```bash
-    git clone https://github.com/yourusername/bev-poolv2-tensorrt-plugin.git
+    git clone https://github.com/mesh-pch/bev_poolv2.git
     cd bev-poolv2-tensorrt-plugin
     ```
 
