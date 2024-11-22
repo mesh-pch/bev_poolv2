@@ -35,7 +35,7 @@ To install the plugin, follow these steps:
 4. Source the environment variables:
     ```bash
     source source_env.bash
-        ```
+    ```
 5. Build the plugin:
     ```bash
     mkdir build
