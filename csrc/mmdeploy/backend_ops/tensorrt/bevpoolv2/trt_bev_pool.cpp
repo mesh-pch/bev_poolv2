@@ -87,10 +87,14 @@ bool TRTBEVPoolV2::supportsFormatCombination(int32_t pos, const nvinfer1::Plugin
   // input[6] == interval_lengths->kINT32
   // output[0] == bev_feat->kFLOAT or kHALF or kINT8
   if (pos == 0 || pos == 1 || pos == 7) {
-    return (ioDesc[pos].type == nvinfer1::DataType::kHALF || 
-            ioDesc[pos].type == nvinfer1::DataType::kINT8 ||
+    // return (ioDesc[pos].type == nvinfer1::DataType::kHALF || 
+    //         ioDesc[pos].type == nvinfer1::DataType::kINT8 ||
+    //         ioDesc[pos].type == nvinfer1::DataType::kFLOAT) &&
+    //    ioDesc[pos].format == nvinfer1::TensorFormat::kLINEAR;
+
+    return (ioDesc[pos].type == nvinfer1::DataType::kHALF ||
             ioDesc[pos].type == nvinfer1::DataType::kFLOAT) &&
-       ioDesc[pos].format == nvinfer1::TensorFormat::kLINEAR;
+      ioDesc[pos].format == nvinfer1::TensorFormat::kLINEAR;
   } else {
     return ioDesc[pos].type == nvinfer1::DataType::kINT32 &&
        ioDesc[pos].format == nvinfer1::TensorFormat::kLINEAR;
@@ -119,57 +123,69 @@ int32_t TRTBEVPoolV2::enqueue(const nvinfer1::PluginTensorDesc *inputDesc,
   nvinfer1::Dims feat_dims = inputDesc[1].dims; // bnhwc
   nvinfer1::Dims interval_dims = inputDesc[5].dims; // n
   nvinfer1::Dims out_dims = outputDesc[0].dims; //bhwc
-  // std::cout << "inputDesc[0] type: " << (inputDesc[0].type == nvinfer1::DataType::kFLOAT ? "float" : "half") << std::endl;
-  // std::cout << "inputDesc[1] type: " << (inputDesc[1].type == nvinfer1::DataType::kFLOAT ? "float" : "half") << std::endl;
-  assert(inputDesc[0].type == inputDesc[1].type);
+  std::cout << "inputDesc[0] type: " << (inputDesc[0].type == nvinfer1::DataType::kFLOAT ? "float" : "half") << std::endl;
+  std::cout << "inputDesc[1] type: " << (inputDesc[1].type == nvinfer1::DataType::kFLOAT ? "float" : "half") << std::endl;
+  // assert(inputDesc[0].type == inputDesc[1].type);
   auto data_type = inputDesc[0].type;
   int32_t num_points = out_dims.d[0]*out_dims.d[1]*out_dims.d[2]*out_dims.d[3] * out_dims.d[4];
-  // float* host_output = new float[num_points];
-  // std::cout << "num_points: " << num_points << std::endl;
-  switch (data_type) 
+  auto depth_type = inputDesc[0].type;
+  auto feat_type = inputDesc[1].type;
+  float scale_depth = depth_type == nvinfer1::DataType::kINT8 ? inputDesc[0].scale : 1.0;
+  float scale_feat = feat_type == nvinfer1::DataType::kINT8 ? inputDesc[1].scale : 1.0;
+  float scale_out = outputDesc[0].scale;
+
+  if(nvinfer1::DataType::kFLOAT == depth_type)
   {
-    case nvinfer1::DataType::kFLOAT:
-    {
-      bev_pool_v2_set_zero(num_points, (float *)outputs[0]);
-      cudaDeviceSynchronize();
-      bev_pool_v2(feat_dims.d[3], interval_dims.d[0], (float *)inputs[0], (float *)inputs[1],
-        (int32_t *)inputs[2], (int32_t *)inputs[3], (int32_t *)inputs[4], (int32_t *)inputs[5],(int32_t *)inputs[6], (float *)outputs[0],
-        stream);
-      break;
-    }
-    case nvinfer1::DataType::kHALF:
-    {
-      bev_pool_v2_set_zero_half(num_points, (__half *)outputs[0]);
-      cudaDeviceSynchronize();
-      bev_pool_v2_half(feat_dims.d[3], interval_dims.d[0], (__half *)inputs[0], (__half *)inputs[1],
-        (int32_t *)inputs[2], (int32_t *)inputs[3], (int32_t *)inputs[4], (int32_t *)inputs[5], (int32_t *)inputs[6], (__half *)outputs[0],
-        stream);
-      cudaDeviceSynchronize();
-      break;
-    }
-    case nvinfer1::DataType::kINT8:
-    {
-      int8_t* output = static_cast<int8_t*>(outputs[0]);
-      float output_scale = outputDesc[0].scale;
-      bev_pool_v2_set_zero_int8(num_points, output);
-      cudaDeviceSynchronize();
-      const int8_t* input0 = static_cast<const int8_t*>(inputs[0]);
-      float input0_scale = inputDesc[0].scale;
-      const int8_t* input1 = static_cast<const int8_t*>(inputs[1]);
-      float input1_scale = inputDesc[1].scale;
-      bev_pool_v2_int8(feat_dims.d[3], interval_dims.d[0], input0, input1,
-        (int32_t *)inputs[2], (int32_t *)inputs[3], (int32_t *)inputs[4], 
-        (int32_t *)inputs[5], (int32_t *)inputs[6], output,
-        input0_scale, input1_scale, output_scale, stream);
-      cudaDeviceSynchronize();
-      break;
-    }
-    default:
-      std::cerr << "Unsupported data type" << std::endl;
-      break;
-      // return 1;
+    bev_pool_v2_set_zero(num_points, (float *)outputs[0]);
   }
-  // delete[] host_output;
+  else if(nvinfer1::DataType::kHALF == depth_type)
+  {
+    bev_pool_v2_set_zero(num_points, (__half *)outputs[0]);
+  }
+  else if(nvinfer1::DataType::kINT8 == depth_type)
+  {
+    bev_pool_v2_set_zero(num_points, (int8_t *)outputs[0]);
+  }
+
+  if(nvinfer1::DataType::kFLOAT == depth_type && nvinfer1::DataType::kFLOAT == feat_type){
+    bev_pool_v2(feat_dims.d[3], interval_dims.d[0], (float *)inputs[0], (float *)inputs[1],
+      (int32_t *)inputs[2], (int32_t *)inputs[3], (int32_t *)inputs[4], (int32_t *)inputs[5],(int32_t *)inputs[6], (float *)outputs[0],
+      scale_depth, scale_feat, scale_out, stream);
+  }else if(nvinfer1::DataType::kHALF == depth_type && nvinfer1::DataType::kHALF == feat_type){
+    bev_pool_v2(feat_dims.d[3], interval_dims.d[0], (__half *)inputs[0], (__half *)inputs[1],
+      (int32_t *)inputs[2], (int32_t *)inputs[3], (int32_t *)inputs[4], (int32_t *)inputs[5], (int32_t *)inputs[6], (__half *)outputs[0],
+      scale_depth, scale_feat, scale_out, stream);
+  }else if(nvinfer1::DataType::kINT8 == depth_type && nvinfer1::DataType::kINT8 == feat_type){
+    bev_pool_v2(feat_dims.d[3], interval_dims.d[0], (int8_t *)inputs[0], (int8_t *)inputs[1],
+      (int32_t *)inputs[2], (int32_t *)inputs[3], (int32_t *)inputs[4], (int32_t *)inputs[5], (int32_t *)inputs[6], (int8_t *)outputs[0],
+      scale_depth, scale_feat, scale_out, stream);
+  }else if(nvinfer1::DataType::kFLOAT == depth_type && nvinfer1::DataType::kHALF == feat_type){
+    bev_pool_v2(feat_dims.d[3], interval_dims.d[0], (float *)inputs[0], (__half *)inputs[1],
+      (int32_t *)inputs[2], (int32_t *)inputs[3], (int32_t *)inputs[4], (int32_t *)inputs[5], (int32_t *)inputs[6], (float *)outputs[0],
+      scale_depth, scale_feat, scale_out, stream);
+  }else if(nvinfer1::DataType::kFLOAT == depth_type && nvinfer1::DataType::kINT8 == feat_type){
+    bev_pool_v2(feat_dims.d[3], interval_dims.d[0], (float *)inputs[0], (int8_t *)inputs[1],
+      (int32_t *)inputs[2], (int32_t *)inputs[3], (int32_t *)inputs[4], (int32_t *)inputs[5], (int32_t *)inputs[6], (float *)outputs[0],
+      scale_depth, scale_feat, scale_out, stream);
+  }else if(nvinfer1::DataType::kHALF == depth_type && nvinfer1::DataType::kFLOAT == feat_type){
+    bev_pool_v2(feat_dims.d[3], interval_dims.d[0], (__half *)inputs[0], (float *)inputs[1],
+      (int32_t *)inputs[2], (int32_t *)inputs[3], (int32_t *)inputs[4], (int32_t *)inputs[5], (int32_t *)inputs[6], (__half *)outputs[0],
+      scale_depth, scale_feat, scale_out, stream);
+  }else if(nvinfer1::DataType::kHALF == depth_type && nvinfer1::DataType::kINT8 == feat_type){
+    bev_pool_v2(feat_dims.d[3], interval_dims.d[0], (__half *)inputs[0], (int8_t *)inputs[1],
+      (int32_t *)inputs[2], (int32_t *)inputs[3], (int32_t *)inputs[4], (int32_t *)inputs[5], (int32_t *)inputs[6], (__half *)outputs[0],
+      scale_depth, scale_feat, scale_out, stream);
+  }else if(nvinfer1::DataType::kINT8 == depth_type && nvinfer1::DataType::kFLOAT == feat_type){
+    bev_pool_v2(feat_dims.d[3], interval_dims.d[0], (int8_t *)inputs[0], (float *)inputs[1],
+      (int32_t *)inputs[2], (int32_t *)inputs[3], (int32_t *)inputs[4], (int32_t *)inputs[5], (int32_t *)inputs[6], (int8_t *)outputs[0],
+      scale_depth, scale_feat, scale_out, stream);
+  }else if(nvinfer1::DataType::kINT8 == depth_type && nvinfer1::DataType::kHALF == feat_type){
+    bev_pool_v2(feat_dims.d[3], interval_dims.d[0], (int8_t *)inputs[0], (__half *)inputs[1],
+      (int32_t *)inputs[2], (int32_t *)inputs[3], (int32_t *)inputs[4], (int32_t *)inputs[5], (int32_t *)inputs[6], (int8_t *)outputs[0],
+      scale_depth, scale_feat, scale_out, stream);
+  }else{
+    std::cerr << "Unsupported data type" << std::endl;
+  }
   return 0;
 }
 
